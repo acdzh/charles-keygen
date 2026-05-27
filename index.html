@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Key Generator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 24px;
+      line-height: 1.5;
+    }
+
+    input,
+    button {
+      font-size: 16px;
+      padding: 8px;
+    }
+
+    input {
+      width: 280px;
+      max-width: 100%;
+    }
+
+    button {
+      cursor: pointer;
+      margin-left: 8px;
+    }
+
+    .result {
+      margin-top: 16px;
+      padding: 12px;
+      border: 1px solid #ccc;
+      background: #f7f7f7;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h1>Key Generator</h1>
+  <p>输入 name，点击按钮生成 key。</p>
+
+  <input id="nameInput" type="text" placeholder="请输入 name">
+  <button id="generateBtn" type="button">生成</button>
+
+  <div class="result">
+    <div><strong>Name:</strong> <span id="nameResult">-</span></div>
+    <div><strong>Key:</strong> <span id="keyResult">-</span></div>
+  </div>
+
+  <script>
+    const W = 32;
+    const R = 12;
+    const P32 = 0xB7E15163;
+    const Q32 = 0x9E3779B9;
+
+    const RC5KEY_NAME = 0x7a21c951691cd470n;
+    const RC5KEY_KEY = 0xb4f0e0ccec0eafadn;
+    const NAME_PREFIX = 0x54882f8a;
+
+    class SimpleRC5 {
+      constructor(key) {
+        this.S = new Array(2 * (R + 1));
+        this.expandKey(key);
+      }
+
+      expandKey(key) {
+        const L = [
+          Number((key >> 32n) & 0xFFFFFFFFn) >>> 0,
+          Number(key & 0xFFFFFFFFn) >>> 0
+        ];
+        const c = 2;
+        const t = 2 * (R + 1);
+
+        this.S[0] = P32 >>> 0;
+        for (let i = 1; i < t; i++) {
+          this.S[i] = (this.S[i - 1] + Q32) >>> 0;
+        }
+
+        let A = 0;
+        let B = 0;
+        let i = 0;
+        let j = 0;
+        const n = 3 * Math.max(t, c);
+
+        for (let k = 0; k < n; k++) {
+          A = this.S[i] = this.rotateLeft((this.S[i] + A + B) >>> 0, 3);
+          B = L[j] = this.rotateLeft((L[j] + A + B) >>> 0, (A + B) & 31);
+          i = (i + 1) % t;
+          j = (j + 1) % c;
+        }
+      }
+
+      rotateLeft(val, n) {
+        val = val >>> 0;
+        n = n & 31;
+        return ((val << n) | (val >>> (W - n))) >>> 0;
+      }
+
+      rotateRight(val, n) {
+        val = val >>> 0;
+        n = n & 31;
+        return ((val >>> n) | (val << (W - n))) >>> 0;
+      }
+
+      encrypt(block) {
+        let A = Number((block >> 32n) & 0xFFFFFFFFn) >>> 0;
+        let B = Number(block & 0xFFFFFFFFn) >>> 0;
+
+        A = (A + this.S[0]) >>> 0;
+        B = (B + this.S[1]) >>> 0;
+        for (let i = 1; i <= R; i++) {
+          A = (this.rotateLeft(A ^ B, B & 31) + this.S[2 * i]) >>> 0;
+          B = (this.rotateLeft(B ^ A, A & 31) + this.S[2 * i + 1]) >>> 0;
+        }
+
+        return (BigInt(A) << 32n) | BigInt(B);
+      }
+
+      decrypt(block) {
+        let A = Number((block >> 32n) & 0xFFFFFFFFn) >>> 0;
+        let B = Number(block & 0xFFFFFFFFn) >>> 0;
+
+        for (let i = R; i >= 1; i--) {
+          B = this.rotateRight((B - this.S[2 * i + 1]) >>> 0, A & 31) ^ A;
+          A = this.rotateRight((A - this.S[2 * i]) >>> 0, B & 31) ^ B;
+        }
+        B = (B - this.S[1]) >>> 0;
+        A = (A - this.S[0]) >>> 0;
+
+        return (BigInt(A) << 32n) | BigInt(B);
+      }
+    }
+
+    function calcPrefix(name) {
+      const normalized = name.replace(/[\u0020\u00a0\u180e\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u202f\u205f\u3000]/g, " ");
+      const bytes = new TextEncoder().encode(normalized);
+      const length = bytes.length + 4;
+      const padded = (((-length) >>> 0) & 7) + length;
+
+      const input = new Uint8Array(padded);
+      const inputView = new DataView(input.buffer);
+      inputView.setInt32(0, bytes.length, false);
+      input.set(bytes, 4);
+
+      const rc5 = new SimpleRC5(RC5KEY_NAME);
+      const output = new Uint8Array(padded);
+      const outputView = new DataView(output.buffer);
+
+      for (let i = 0; i < padded; i += 8) {
+        const block = inputView.getBigUint64(i, false);
+        const encrypted = rc5.encrypt(block);
+        outputView.setBigUint64(i, encrypted, false);
+      }
+
+      let n = 0;
+      for (let i = 0; i < output.length; i++) {
+        n = rc5.rotateLeft(n ^ output[i], 3);
+      }
+      return n >>> 0;
+    }
+
+    function xorBytes(n) {
+      let result = 0n;
+      for (let i = 56; i >= 0; i -= 8) {
+        result ^= (n >> BigInt(i)) & 0xFFn;
+      }
+      return Number(result & 0xFFn);
+    }
+
+    function key(prefix, suffix) {
+      let input = BigInt(prefix >>> 0) << 32n;
+      const suffixHigh = (suffix >>> 16) & 0xFFFF;
+
+      if (suffixHigh === 0x0401 || suffixHigh === 0x0402 || suffixHigh === 0x0403) {
+        input |= BigInt(suffix >>> 0);
+      } else {
+        input |= BigInt((0x01000000 | (suffix & 0xFFFFFF)) >>> 0);
+      }
+
+      const out = new SimpleRC5(RC5KEY_KEY).decrypt(input);
+      const checksum = xorBytes(input);
+      return checksum.toString(16).padStart(2, "0") + out.toString(16).padStart(16, "0");
+    }
+
+    function keygen(name, suffix) {
+      let actualSuffix = suffix;
+      if (actualSuffix === undefined) {
+        actualSuffix = window.crypto.getRandomValues(new Uint32Array(1))[0];
+      }
+      const prefix = (calcPrefix(name) ^ NAME_PREFIX) >>> 0;
+      return key(prefix, actualSuffix);
+    }
+
+    const nameInput = document.getElementById("nameInput");
+    const generateBtn = document.getElementById("generateBtn");
+    const nameResult = document.getElementById("nameResult");
+    const keyResult = document.getElementById("keyResult");
+
+    function generateKey() {
+      const name = nameInput.value;
+      if (!name) {
+        nameResult.textContent = "-";
+        keyResult.textContent = "请输入 name";
+        return;
+      }
+
+      nameResult.textContent = name;
+      keyResult.textContent = keygen(name);
+    }
+
+    generateBtn.addEventListener("click", generateKey);
+    nameInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        generateKey();
+      }
+    });
+  </script>
+</body>
+</html>
